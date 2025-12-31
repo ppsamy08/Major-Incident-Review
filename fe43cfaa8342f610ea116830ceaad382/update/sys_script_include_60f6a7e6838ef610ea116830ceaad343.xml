@@ -1,0 +1,947 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_script_include">
+    <sys_script_include action="INSERT_OR_UPDATE">
+        <access>public</access>
+        <active>true</active>
+        <api_name>x_61049_ma_inc_r_0.majorIncidentReviewGenerator</api_name>
+        <caller_access>1</caller_access>
+        <client_callable>false</client_callable>
+        <description>Generates a major incident review</description>
+        <mobile_callable>false</mobile_callable>
+        <name>majorIncidentReviewGenerator</name>
+        <sandbox_callable>false</sandbox_callable>
+        <script><![CDATA[var majorIncidentReviewGenerator = Class.create();
+
+majorIncidentReviewGenerator.prototype = {
+
+    allowCodeTag: null,
+    htmlEnabledJournalFields: null,
+
+    initialize: function() {},
+
+    /**
+     * Generate post incident review details for given record
+     * @param1 incidentGR (GlideRecord), Record for which you need to generate review
+     * return (string), Review details as HTML string
+     */
+    generate: function(incidentGR) {
+
+        var title = this._buildTitle(incidentGR);
+        var intro = this._buildIntro(incidentGR);
+        var timeline = this._buildTimeline(incidentGR);
+        var reviewResults = this._buildResults(incidentGR);
+        var closeInfo = this._buildCloseInfo(incidentGR);
+
+        return this._constructReport(title, intro, timeline, closeInfo, reviewResults);
+    },
+
+    /**
+     * Create PDF file from HTML string and attach to given record
+     * @param1 incidentGR (GlideRecord), Record to where you need attach the pdf
+     * @param2 html (string), HTML string which needs to be converted as PDF
+     * return null
+     */
+    convertHTMLtoPDF: function(incidentGR, html) {
+
+        var pdfUtils = new sn_pdfgeneratorutils.PDFGenerationAPI;
+
+        var hfInfo = {};
+
+        var headerImage = this._getHeaderOrFooterImage("x_61049_ma_inc_r_0.pdf_doc.header_image");
+        if (headerImage) {
+            hfInfo["HeaderImageAttachmentId"] = headerImage;
+            hfInfo["HeaderImageAlignment"] = "TOP_RIGHT";
+        }
+
+        var footerImage = this._getHeaderOrFooterImage("x_61049_ma_inc_r_0.pdf_doc.footer_image");
+        if (footerImage) {
+            hfInfo["FooterImageAttachmentId"] = footerImage;
+            hfInfo["FooterImageAlignment"] = "TOP_LEFT";
+        }
+
+        hfInfo["FooterText"] = "Major Incident Review";
+		hfInfo["FooterTextAlignment"] = "TOP_RIGHT";
+        hfInfo["PageSize"] = "A4";
+        hfInfo["GeneratePageNumber"] = "false";
+        hfInfo["TopOrBottomMargin"] = "50";
+        hfInfo["LeftOrRightMargin"] = "36";
+
+        pdfUtils.convertToPDFWithHeaderFooterAsync(html, incidentGR.getTableName(), incidentGR.getUniqueValue(), "Major_Incident_Review", hfInfo);
+
+    },
+
+
+    _getHeaderOrFooterImage: function(propertyName) {
+
+        var imageSysId = gs.getProperty(propertyName);
+
+        var attachmentSysId = new GlideRecord("sys_attachment");
+
+        if (attachmentSysId.get("table_sys_id", imageSysId)) {
+            return attachmentSysId.getUniqueValue();
+        }
+
+        return "";
+
+    },
+
+    _buildTitle: function(incidentGR) {
+
+        var title = this._addTitle(gs.getMessage("Major Incident Review : {0}", incidentGR.number));
+        title += "\n" + this._addHeaderBlock(incidentGR);
+
+        return title;
+    },
+
+    _buildIntro: function(incidentGR) {
+
+        var desc = this._addHeader(gs.getMessage("Description"));
+
+        if (incidentGR.description) {
+            var descFormatted = this._replaceNewLineWithBR(incidentGR.description);
+            desc += this._addParagraph(descFormatted);
+        }
+
+        return desc;
+    },
+
+    _replaceNewLineWithBR: function(content) {
+        var content_formatted = content.replace(/(\r\n|\n)/g, "<br/>");
+        return content_formatted;
+    },
+
+    _buildTimeline: function(incidentGR) {
+
+        var columnsOfInterest = "assigned_to,short_description,state,priority,description,work_notes,comments";
+        var tasksPerBatch = 20;
+        var incidentTeam = "";
+        var timeline = "";
+        var ret = "";
+        this.fieldCache = {};
+        this.rawToDisplayCache = {};
+
+        incidentTeam += this._addToIncidentTeam(incidentGR.assigned_to + "", incidentTeam);
+        incidentTeam += this._addToIncidentTeam(incidentGR.watch_list + "", incidentTeam);
+
+        if (incidentGR.parent_incident)
+            timeline += this._outputTaskCreationToTimeline(incidentGR.parent_incident);
+        var lookupTask = {};
+        var timelineEntries = {};
+        var taskInitialData = {};
+
+        var childTasks = new GlideRecord("task");
+        childTasks.addQuery("parent", incidentGR.sys_id);
+        childTasks.query();
+        while (childTasks.next()) {
+            lookupTask[childTasks.sys_id] = childTasks.number + '';
+            this._getCurrentTaskValues(taskInitialData, childTasks, columnsOfInterest);
+        }
+        lookupTask[incidentGR.sys_id] = incidentGR.number + "";
+        this._getCurrentTaskValues(taskInitialData, incidentGR, columnsOfInterest);
+
+        var queriesForTasks = this._getEncodedQueriesForTask(lookupTask, tasksPerBatch, incidentGR.sys_id);
+        var queryForFields = this._getEncodedQueryForFields(columnsOfInterest);
+        var workNotesStorage = {};
+
+        for (var taskBatch = 0; taskBatch < queriesForTasks.length; ++taskBatch) {
+            var auditEntry = new GlideRecord("sys_audit");
+            var addOrs = auditEntry.addEncodedQuery(queriesForTasks[taskBatch]);
+            auditEntry.addEncodedQuery(queryForFields);
+            auditEntry.orderBy("documentkey");
+            auditEntry.orderBy("internal_checkpoint");
+            auditEntry.orderBy("fieldname");
+            auditEntry.query();
+
+            var lastLine = null;
+            var pointKey = "";
+            var timelineEntry = "";
+            var timelineEntryBaseLength = 0;
+            var timelineTime = "";
+            var timelineKey = "";
+            var displayValue = "";
+            var isSI = (taskBatch == (queriesForTasks.length - 1));
+            while (auditEntry.next()) {
+
+                if (this._skipAuditEntry(auditEntry)) {
+                    continue;
+                }
+
+                if (this._isWorkNote(auditEntry)) {
+                    if (isSI) {
+                        if (this._isDuplicateWorkNote(auditEntry, workNotesStorage))
+                            continue;
+                    } else
+                        this._addWorkNoteEntry(auditEntry, workNotesStorage);
+                }
+
+                displayValue = this._getDisplayValue(auditEntry, "newvalue", taskInitialData);
+                this._updateTaskValues(taskInitialData, auditEntry);
+                var currentPointKey = auditEntry.record_checkpoint + auditEntry.documentkey;
+                // If changed task and record checkpoint, store to timeline entries, start new header
+                if (pointKey != currentPointKey) {
+                    if (timelineEntryBaseLength == timelineEntry.length)
+                        timelineEntry = ""; // No new data added, nothing to store. Prevents empty sections
+                    if (timelineEntry)
+                        timelineEntry += "</p>";
+                    this._storeTimelineEntry(timelineEntries, timelineEntry, timelineTime);
+                    timelineEntry = "";
+                    timelineTime = auditEntry.sys_created_on + "";
+                    pointKey = currentPointKey;
+                    timelineEntry += this._outputTimelineHeader(auditEntry);
+                    timelineEntry += "<p style='margin:5px'>";
+                    if (auditEntry.documentkey + '' != incidentGR.sys_id + '')
+                        timelineEntry += lookupTask[auditEntry.documentkey] + "<br/>";
+                    timelineEntryBaseLength = timelineEntry.length;
+                }
+
+                if (timelineKey != auditEntry.documentkey) {
+                    timelineKey = auditEntry.documentkey;
+                    incidentTeam += this._addToIncidentTeam(auditEntry.user + "", incidentTeam);
+                }
+                // And finally, write out this entry
+                var thisLineItem = this._outputTimelineItem(auditEntry, displayValue) + "<br/>";
+                var compareVal = thisLineItem + auditEntry.documentkey;
+                if (compareVal == lastLine)
+                    continue;
+                timelineEntry += thisLineItem;
+                lastLine = compareVal;
+            }
+            if (timelineEntryBaseLength == timelineEntry.length)
+                timelineEntry = ""; // No new data added, nothing to store. Prevents empty sections
+            if (timelineEntry)
+                timelineEntry += "</p>";
+            this._storeTimelineEntry(timelineEntries, timelineEntry, timelineTime);
+        }
+        this._addTaskCreationToTimeline(timelineEntries, taskInitialData, columnsOfInterest);
+
+        // Walk timeline entries in order and add to timeline
+        timeline += this._outputAllToTimeline(timelineEntries);
+
+        if (incidentTeam) {
+            ret += this._addHeader(gs.getMessage("Incident Team"));
+            ret += "\n" + this._addParagraph(incidentTeam);
+        }
+
+        if (timeline) {
+            ret += this._addHeader(gs.getMessage("Timeline"));
+            ret += "\n" + timeline;
+        }
+
+        return ret;
+    },
+
+    _getDisplayValue: function(auditEntry, fieldName, taskInitialData) {
+
+        var value = auditEntry.getValue(fieldName);
+        var auditEntryFieldName = auditEntry.fieldname;
+
+        if (this._isReference(auditEntryFieldName))
+            return this._lookupUserName(value);
+
+        if (this._isChoice(auditEntryFieldName))
+            return this._lookupChoiceName(value, taskInitialData[auditEntry.documentkey][auditEntryFieldName].choicePrefix);
+
+        if (this._isHTMLEnabledJournalField(auditEntryFieldName))
+            return this._lookupHTMLEnabledJournalFieldValue(value);
+
+        return value;
+    },
+
+
+    _isWorkNote: function(auditEntry) {
+        return (auditEntry.fieldname == "work_notes");
+    },
+
+    _isHTMLEnabledJournalField: function(fieldName) {
+
+        if (gs.nil(fieldName)) return false;
+
+        if (this.htmlEnabledJournalFields === null) {
+
+            var fields = gs.getProperty("x_61049_ma_inc_r_0.journal_field.html_enabled").split(",");
+            var map = {};
+
+            for (var i = 0; i < fields.length; i++) {
+                map[fields[i]] = true;
+            }
+
+            this.htmlEnabledJournalFields = map;
+        }
+
+        return this.htmlEnabledJournalFields[fieldName] === true;
+    },
+
+
+    _skipAuditEntry: function(auditEntry) {
+
+        var value = auditEntry.newvalue + "";
+
+        if (value.indexOf("Major Incident Review") > -1) {
+            return true;
+        }
+
+        return false;
+
+    },
+
+    _isDuplicateWorkNote: function(auditEntry, workNotesStorage) {
+
+        var entryKey = this._roundString(auditEntry.sys_created_on, 1);
+        var workNoteList = workNotesStorage[entryKey];
+        if (workNoteList)
+            return workNoteList.indexOf(auditEntry.newvalue + "") >= 0;
+        return false;
+
+    },
+
+    _addWorkNoteEntry: function(auditEntry, workNotesStorage) {
+
+        var entryKey = this._roundString(auditEntry.sys_created_on, 1);
+        var workNoteList = workNotesStorage[entryKey];
+        if (!workNoteList)
+            workNoteList = [auditEntry.newvalue + ""];
+        else
+            workNoteList.push(auditEntry.newvalue + "");
+        workNotesStorage[entryKey] = workNoteList;
+
+    },
+
+    _roundString: function(strVal, charsToRemove) {
+        return strVal.substring(0, strVal.length - charsToRemove);
+    },
+
+    _lookupUserName: function(userIdOrName) {
+
+        if (this.rawToDisplayCache[userIdOrName])
+            return this.rawToDisplayCache[userIdOrName];
+
+        var gr = new GlideRecord("sys_user");
+        gr.addQuery("sys_id", userIdOrName).addOrCondition("user_name", "=", userIdOrName);
+        gr.query();
+        if (gr.next()) {
+            this.rawToDisplayCache[userIdOrName] = gr.getDisplayValue();
+            return gr.getDisplayValue();
+        }
+        this.rawToDisplayCache[userIdOrName] = userIdOrName;
+        return userIdOrName;
+    },
+
+    _lookupChoiceName: function(choiceValue, choicePrefix) {
+
+        if (this.rawToDisplayCache[choicePrefix + choiceValue])
+            return this.rawToDisplayCache[choicePrefix + choiceValue];
+
+        var choiceName = this._getChoiceName(choiceValue, choicePrefix);
+        this.rawToDisplayCache[choicePrefix + choiceValue] = choiceName;
+        return choiceName;
+    },
+
+    _getChoiceName: function(choiceValue, choicePrefix) {
+
+        if (!choicePrefix)
+            return choiceValue;
+
+        var choiceData = choicePrefix.split(".");
+        var lookupChoices = new GlideRecord("sys_choice");
+        var table = new GlideTableHierarchy(choiceData[0]);
+        lookupChoices.addEncodedQuery("nameIN" + table.getHierarchy() + "^element=" + choiceData[1]);
+        lookupChoices.addQuery("value", choiceValue);
+        lookupChoices.addQuery("inactive", false);
+        lookupChoices.query();
+        var fallbackTable = "";
+        var fallbackLanguage = "";
+        var userLanguageCode = "";
+        while (lookupChoices.next()) {
+            if (!lookupChoices.hasNext() && !fallbackLanguage)
+                return lookupChoices.label;
+            // If there are multiple, try to return the matching language and table.
+            if (!userLanguageCode) {
+                var session = gs.getSession();
+                userLanguageCode = session.getLanguage();
+            }
+            if ((lookupChoices.language == userLanguageCode) && (lookupChoices.name == choiceData[0]))
+                return lookupChoices.label + "";
+            if (lookupChoices.name == choiceData[0])
+                fallbackTable = lookupChoices.label + "";
+            if (!fallbackLanguage)
+                fallbackLanguage = lookupChoices.label + "";
+            if (lookupChoices.language == "en")
+                fallbackLanguage = lookupChoices.label + ""; // English is the default
+        }
+        if (fallbackTable)
+            return fallbackTable;
+        return fallbackLanguage;
+    },
+
+    _lookupHTMLEnabledJournalFieldValue: function(value) {
+
+        if (this.allowCodeTag === null)
+            this.allowCodeTag = gs.getProperty("glide.ui.security.allow_codetag") === "true";
+
+        if (typeof value !== "string" || this.allowCodeTag === false)
+            return value;
+
+        return value.replace(/(\[code\].*?\[\/code\])/g, this._getHTMLEnabledJournalFieldValueReplacement);
+    },
+
+    _getHTMLEnabledJournalFieldValueReplacement: function(match) {
+        return match.slice(6, match.length - 7);
+    },
+
+    _isReference: function(colName) {
+        return colName == "assigned_to";
+    },
+
+    _isChoice: function(colName) {
+        return colName == "state" || colName == "priority";
+    },
+
+    _getCurrentTaskValues: function(taskData, taskRecord, columnsToRecord) {
+
+        if (!taskRecord)
+            return;
+        if (!taskRecord.sys_id)
+            return;
+        var taskCols = {};
+        var listCols = columnsToRecord.split(",");
+        for (var i = 0; i < listCols.length; ++i) {
+            var colName = listCols[i];
+            if (this._isJournalField(colName))
+                continue;
+            if (colName) {
+                var choicePrefix = "";
+                if (this._isChoice(colName))
+                    choicePrefix = taskRecord.sys_class_name + "." + colName + ".";
+                taskCols[colName] = {
+                    display: taskRecord.getDisplayValue(colName),
+                    updated: false,
+                    choicePrefix: choicePrefix
+                };
+                if (this._isReference(colName))
+                    this._addRawToDisplay(taskRecord.getValue(colName), taskRecord.getDisplayValue(colName));
+                else if (this._isChoice(colName))
+                    this._addRawToDisplay(choicePrefix + taskRecord.getValue(colName), taskRecord.getDisplayValue(colName));
+            }
+        }
+        taskData[taskRecord.sys_id] = taskCols;
+    },
+
+    _isJournalField: function(colName) {
+        if ((colName == "work_notes") || (colName == "comments") || (colName == "automation_activity"))
+            return true;
+        return false;
+    },
+
+    _addRawToDisplay: function(key, display) {
+        this.rawToDisplayCache[key] = display;
+    },
+
+    _updateTaskValues: function(taskInitialData, auditEntry) {
+
+        var sysId = auditEntry.documentkey;
+        var colName = auditEntry.fieldname;
+        if (this._isJournalField(colName))
+            return;
+        if ((!sysId) || (!colName))
+            return;
+        var taskRecord = taskInitialData[sysId];
+        if (!taskRecord)
+            return;
+        var colData = taskRecord[colName];
+        if (!colData)
+            return;
+        if (colData.updated)
+            return;
+        colData.updated = true;
+        colData.display = "";
+        if (!auditEntry.oldvalue)
+            return;
+        var displayValue = this._getDisplayValue(auditEntry, "oldvalue", taskInitialData);
+        colData.display = displayValue;
+
+    },
+
+    _addTaskCreationToTimeline: function(timelineEntries, taskData, orderedColumnList) {
+
+        var taskIds = Object.keys(taskData);
+        var listCols = orderedColumnList.split(",");
+
+        for (var i = 0; i < taskIds.length; ++i) {
+            var taskInitial = taskData[taskIds[i]];
+            if (!taskInitial)
+                continue;
+            var taskRecord = new GlideRecord("task");
+            if (!taskRecord.get(taskIds[i]))
+                continue;
+            var timelineEntry = this._wrapText('h3', taskRecord.sys_created_on + " " + this._lookupUserName(taskRecord.sys_created_by));
+            timelineEntry += "<p style='margin:5px'>";
+            // SIR832240 created
+            timelineEntry += gs.getMessage("{0} created<br/>", taskRecord.number);
+            for (var col = 0; col < listCols.length; ++col) {
+                var colName = listCols[col];
+                if (!colName)
+                    continue;
+                var colData = taskInitial[colName];
+                if (!colData)
+                    continue;
+                timelineEntry += this._outputInitialValue(colName, taskRecord.sys_class_name, colData);
+            }
+            timelineEntry += "</p>";
+            this._storeTimelineEntry(timelineEntries, timelineEntry, taskRecord.sys_created_on);
+        }
+    },
+
+    _outputAllToTimeline: function(timelineEntries) {
+
+        var orderedKeys = Object.keys(timelineEntries);
+        var taskTimeline = "";
+        orderedKeys.sort();
+        var workNotesName = this._lookupFieldnameFromCache("work_notes", "task");
+        var lastEntry = "";
+        for (var timeKey = 0; timeKey < orderedKeys.length; ++timeKey) {
+            var timelineEntry = timelineEntries[orderedKeys[timeKey]];
+            if (this._duplicateEntries(timelineEntry, lastEntry, workNotesName))
+                continue;
+            lastEntry = timelineEntry;
+            taskTimeline += timelineEntry;
+        }
+        return taskTimeline;
+    },
+
+    _duplicateEntries: function(timelineEntry1, timelineEntry2, workNotesName) {
+        // Checking for worknotes rollup being duplicated
+        var isWorknotesCase = false;
+        if ((timelineEntry1.indexOf(workNotesName) >= 0) &&
+            (timelineEntry2.indexOf(workNotesName) >= 0))
+            isWorknotesCase = true;
+        if (timelineEntry1 == timelineEntry2)
+            return true;
+        // Strip clean. If only data is a work notes entry, strip any task ID line
+        if (this._cleanEntry(timelineEntry1, isWorknotesCase) == this._cleanEntry(timelineEntry2, isWorknotesCase))
+            return true;
+
+        return false;
+    },
+
+    _cleanEntry: function(timelineEntry, ignoreNumber) {
+        // Remove header
+        var cleanEntry = timelineEntry.substring(timelineEntry.indexOf("</h3>") + 5);
+        // Remove paragraph opener
+        cleanEntry = cleanEntry.substring(cleanEntry.indexOf(">") + 1);
+        // Check for and remove any number
+        if (ignoreNumber && cleanEntry.indexOf("<br/>") > 0) {
+            var line1 = cleanEntry.substring(0, cleanEntry.indexOf("<br/>"));
+            if ((line1.indexOf(" ") < 0) && (line1.length < 20)) // Reasonable assumption that a number has no spaces in it, and is short
+                cleanEntry = cleanEntry.substring(line1.length + 5); // length of number plus the HTML br after
+        }
+        return cleanEntry;
+    },
+
+    _storeTimelineEntry: function(timelineEntries, timelineEntry, timelineTime) {
+
+        if (!timelineEntry)
+            return;
+        if (!timelineTime)
+            return;
+        if (timelineEntries[timelineTime])
+            if (!this._duplicateEntries(timelineEntries[timelineTime], timelineEntry, this._lookupFieldnameFromCache("work_notes", "task")))
+                timelineEntry = timelineEntries[timelineTime] + timelineEntry;
+            else if (timelineEntry.length < timelineEntries[timelineTime].length)
+            timelineEntry = timelineEntries[timelineTime];
+        timelineEntries[timelineTime] = timelineEntry;
+
+    },
+
+    _getEncodedQueriesForTask: function(taskList, batchSize, lastTaskId) {
+
+        var encodedQueries = [];
+        var allTasks = Object.keys(taskList);
+        var encodedQuery = "";
+        var countInQuery = 0;
+        for (var index = 0; index < allTasks.length; ++index) {
+            var taskId = allTasks[index];
+            // Last task id will be placed in the last batch, exclude from here
+            if (taskId == lastTaskId)
+                continue;
+            if (taskId) {
+                if (encodedQuery)
+                    encodedQuery += "^OR";
+                encodedQuery += "documentkey=" + taskId;
+                ++countInQuery;
+            }
+            if (countInQuery >= batchSize) {
+                encodedQueries.push(encodedQuery);
+                countInQuery = 0;
+                encodedQuery = "";
+            }
+        }
+        // LastTask is the only task here, so not push empty query
+        if (encodedQuery != "")
+            encodedQueries.push(encodedQuery);
+        encodedQueries.push("documentkey=" + lastTaskId);
+        return encodedQueries;
+
+    },
+
+    _getEncodedQueryForFields: function(columnList) {
+
+        var raColumns = columnList.split(",");
+        var encodedQuery = "";
+        for (var col = 0; col < raColumns.length; ++col) {
+            var columnName = raColumns[col];
+            if (!columnName)
+                continue;
+            if (encodedQuery)
+                encodedQuery += "^OR";
+            encodedQuery += "fieldname=" + columnName;
+        }
+        return encodedQuery;
+
+    },
+
+    _outputTaskCreationToTimeline: function(taskRecordId) {
+
+        var taskRecord = new GlideRecord("task");
+        if (!taskRecord.get(taskRecordId))
+            return "";
+
+        var resultStr = this._wrapText('h3', taskRecord.getDisplayValue('sys_created_on') + " " + this._getTaskUser(taskRecord));
+
+        resultStr += "<p style='margin:5px'>";
+        resultStr += gs.getMessage("{0} created: '{1}'", [taskRecord.number, taskRecord.short_description]);
+        var value = taskRecord.getDisplayValue("assigned_to");
+        resultStr = this._appendTo(gs.getMessage("Assigned to: {0}", value), value, resultStr, "<br/>");
+        resultStr = this._appendTo("", taskRecord.description, resultStr, "<br/>");
+        resultStr += "</p>";
+
+        return resultStr;
+    },
+
+    _getTaskUser: function(taskRecord) {
+        // Opened by first, created by otherwise
+        if (taskRecord.opened_by)
+            return taskRecord.getDisplayValue("opened_by");
+        return taskRecord.getDisplayValue("created_by");
+    },
+
+    _buildCloseInfo: function(incidentGR) {
+
+        var closeInfo = "";
+
+        var contents = "";
+        if (incidentGR.close_code)
+            contents += this._wrapText('h4', gs.getMessage("Close code")) +
+            this._addParagraph(incidentGR.getDisplayValue("close_code"));
+
+        if (incidentGR.close_notes)
+            contents += this._wrapText('h4', gs.getMessage("Close notes")) +
+            this._addParagraph(incidentGR.close_notes);
+
+        if (incidentGR.problem_id)
+            contents += this._outputTaskInfo(incidentGR.problem_id);
+
+        if (incidentGR.rfc)
+            contents += this._outputTaskInfo(incidentGR.rfc);
+
+        if (contents)
+            closeInfo = this._addHeader(gs.getMessage("Resolution")) + "\n" + contents;
+
+        return closeInfo;
+
+    },
+
+
+    _outputTaskInfo: function(taskRecordId) {
+
+        var taskRecord = new GlideRecord("task");
+        if (!taskRecord.get(taskRecordId))
+            return "";
+
+        var resultStr = "";
+        var value = taskRecord.getDisplayValue("state");
+        resultStr = this._appendTo(gs.getMessage("State: {0}", value), value, resultStr, "<br/>");
+        value = taskRecord.getDisplayValue("assigned_to");
+        resultStr = this._appendTo(gs.getMessage("Assigned to: {0}", value), value, resultStr, "<br/>");
+        value = taskRecord.getDisplayValue("priority");
+        resultStr = this._appendTo(gs.getMessage("Priority: {0}", value), value, resultStr, "<br/>");
+        resultStr = this._appendTo("", taskRecord.short_description, resultStr, "<br/>");
+        if (taskRecord.short_description + "" != taskRecord.description + "")
+            resultStr = this._appendTo("", taskRecord.description, resultStr, "<br/>");
+        resultStr = this._appendTo("", taskRecord.close_notes, resultStr, "<br/>");
+        resultStr += "</p>";
+
+        resultStr = this._wrapText('h3', taskRecord.number) + "<p style='margin:5px'>" + resultStr;
+        return resultStr;
+    },
+
+    _outputTimelineHeader: function(journalRecord) {
+        return this._wrapText('h3', journalRecord.sys_created_on + " " + this._lookupUserName(journalRecord.getValue("user")));
+    },
+
+    _lookupFieldnameFromCache: function(fieldname, tablename) {
+
+        var lookupName = this.fieldCache[tablename + "." + fieldname];
+        if (lookupName)
+            return lookupName;
+        var gr = new GlideRecord(tablename);
+        lookupName = gr.getElement(fieldname).getLabel();
+        if (!lookupName)
+            lookupName = fieldname;
+        this.fieldCache[tablename + "." + fieldname] = lookupName;
+        return lookupName;
+
+    },
+
+    _outputInitialValue: function(colName, tableName, columnData) {
+
+        var colData = columnData.display;
+        if (!colData)
+            return "";
+        return this._lookupFieldnameFromCache(colName, tableName) + ": " + this._cleanColData(colData) + "<br/>";
+
+    },
+
+    _outputTimelineItem: function(journalRecord, displayValue) {
+        return this._lookupFieldnameFromCache(journalRecord.fieldname, journalRecord.tablename) + ": " + this._cleanColData(displayValue);
+    },
+
+    _cleanColData: function(colData) {
+        return colData.trim().replace(/\n\n/g, "\n").replace(/\n/g, "<br/>");
+    },
+
+    _addToIncidentTeam: function(userIds, teamList) {
+
+        var ret = "";
+        var isFirst = (teamList.length == 0);
+        var userRA = userIds.split(',');
+        for (var i = 0; i < userRA.length; ++i) {
+            var user = new GlideRecord("sys_user");
+            if (user.get(userRA[i])) {
+                if (teamList.indexOf(user.name) < 0) {
+                    if (!isFirst)
+                        ret += "<br/>";
+                    else
+                        isFirst = false;
+                    ret += user.name;
+                    if (user.title)
+                        ret += " - " + user.title;
+                    else if (user.department)
+                        ret += " - " + user.getDisplayValue("department");
+                }
+            }
+        }
+        return ret;
+
+    },
+
+    _buildResults: function(incidentGR) {
+
+        var answers = new GlideRecord("asmt_metric_result");
+        answers.addQuery("source_id", incidentGR.sys_id);
+        answers.addQuery("is_default", "!=", "true");
+        answers.addQuery("assessment_group.metric_type", gs.getProperty("x_61049_ma_inc_r_0.mir_metric_type"));
+        answers.addEncodedQuery("string_valueISNOTEMPTY");
+        answers.orderBy("metric.category.order");
+        answers.orderBy("metric.order");
+        answers.orderBy("metric");
+        answers.orderBy("created");
+        answers.query();
+        if (!answers.hasNext())
+            return "";
+
+        var ret = this._addHeader(gs.getMessage("Assessment Results")) +
+            "\n";
+
+        var category = '';
+        var metric = '';
+        var results = {};
+        var resultCount = 0;
+        var isMultiline = false;
+        while (answers.next()) {
+            // Changing or starting a new metric
+            if ((answers.metric + '') != metric) {
+                ret += this._outputExistingResults(results, resultCount);
+
+                results = {};
+                resultCount = 0;
+                metric = answers.metric + '';
+                var metricRecord = this._getMetricRecord(metric);
+                isMultiline = this._isMultiline(metricRecord);
+                if ((metricRecord.category + '') != category) {
+                    category = metricRecord.category + '';
+                    ret += this._outputNewCategory(category);
+                }
+                ret += this._outputNewMetric(metricRecord);
+            }
+            if (isMultiline)
+                ret += this._outputMultiline(answers);
+            else {
+                ++resultCount;
+                this._addToResults(answers, results);
+            }
+        }
+
+        ret += this._outputExistingResults(results, resultCount);
+
+        return ret;
+    },
+
+    _addToResults: function(answerRecord, results) {
+
+        var answerData = results[answerRecord.string_value + ""];
+        if (!answerData) {
+            answerData = {
+                count: 0,
+                users: ""
+            };
+        }
+        answerData.count++;
+        var user = answerRecord.getDisplayValue("user");
+        if (!user)
+            user = gs.getMessage("System");
+        if (answerData.users)
+            answerData.users += ", ";
+        answerData.users += user;
+        results[answerRecord.string_value + ""] = answerData;
+
+    },
+
+    _isMultiline: function(metricRecord) {
+        return (metricRecord.datatype + "" == "string") && (metricRecord.string_option + "" == "multiline");
+    },
+
+    _getMetricRecord: function(metricId) {
+        var gr = new GlideRecord("asmt_metric");
+        gr.get(metricId);
+        return gr;
+    },
+
+    _outputMultiline: function(answerRecord) {
+
+        return gs.getMessage("<p style='margin:5px'><u>{0}</u>:  {1}</p>",
+            [answerRecord.getDisplayValue("user"),
+                answerRecord.string_value
+            ]);
+    },
+
+    _outputExistingResults: function(resultsList, resultCount) {
+
+        var ret = "";
+        for (var answer in resultsList) {
+            var data = resultsList[answer];
+            ret += this._addAnswer(answer, (data.count * 100.0) / (resultCount + 0.0), data.users);
+        }
+        return ret;
+    },
+
+    _addAnswer: function(answer, percent, users) {
+        return gs.getMessage("<p style='margin:5px'>'{0}' {1}% - {2}</p>", [answer, Math.round(percent), users]);
+    },
+
+    _outputNewCategory: function(categoryId) {
+        var gr = new GlideRecord("asmt_metric_category");
+        gr.get(categoryId);
+        return this._addReviewCategory(gr.name);
+    },
+
+    _outputNewMetric: function(metricRecord) {
+        return this._addReviewMetric(metricRecord.question ? metricRecord.question : metricRecord.name);
+    },
+
+    _constructReport: function(title, intro, timeline, closeInfo, reviewResults) {
+        return title + intro + timeline + closeInfo + reviewResults;
+    },
+
+    _addReviewCategory: function(catName) {
+        return this._wrapText('h3', catName);
+    },
+
+    _addReviewMetric: function(metricLabel) {
+        return this._wrapText('h4', metricLabel);
+    },
+
+    _addTitle: function(contents) {
+        return this._wrapText('h1', contents);
+    },
+
+    _addHeaderBlock: function(incidentGR) {
+
+        var header = "";
+        if (incidentGR.short_description)
+            header += this._wrapText('p', incidentGR.short_description);
+        var labelBlock = "";
+        var assignedTo = incidentGR.getDisplayValue("assigned_to");
+        var category = "";
+        var priorities = "";
+        var caller = "";
+        var so = "";
+
+        if (incidentGR.getDisplayValue("subcategory"))
+            category = gs.getMessage("{0} - {1}", [incidentGR.getDisplayValue("category"), incidentGR.getDisplayValue("subcategory")]);
+        else
+            category = incidentGR.getDisplayValue("category");
+
+        var value = incidentGR.getDisplayValue("priority");
+        priorities = this._appendTo(gs.getMessage("Priority: {0}", value), value, priorities, ", ");
+
+        value = incidentGR.getDisplayValue("impact");
+        priorities = this._appendTo(gs.getMessage("Impact: {0}", value), value, priorities, ", ");
+
+        value = incidentGR.getDisplayValue("urgency");
+        priorities = this._appendTo(gs.getMessage("Urgency: {0}", value), value, priorities, ", ");
+
+        caller = incidentGR.getDisplayValue("caller_id");
+        so = incidentGR.getDisplayValue("service_offering");
+
+        labelBlock = this._appendTo(gs.getMessage("Caller: {0}", caller), caller, labelBlock, "<br/>");
+        labelBlock = this._appendTo(gs.getMessage("Service offering: {0}", so), so, labelBlock, "<br/>");
+        labelBlock = this._appendTo("", priorities, labelBlock, "<br/>");
+        labelBlock = this._appendTo(gs.getMessage("Category: {0}", category), category, labelBlock, "<br/>");
+        labelBlock = this._appendTo(gs.getMessage("Assigned to: {0}", assignedTo), assignedTo, labelBlock, "<br/>");
+
+        if (labelBlock)
+            header += this._wrapText('p', labelBlock);
+
+        return header;
+    },
+
+    _appendTo: function(formatString, value, currentString, concatenationString) {
+        if (!value)
+            return currentString;
+        if (currentString)
+            currentString += concatenationString;
+        if (formatString)
+            return currentString + formatString;
+        return currentString + value;
+    },
+
+    _addHeader: function(contents) {
+        return this._wrapText('h2', contents);
+    },
+
+    _addParagraph: function(contents) {
+        return this._wrapText('p', contents);
+    },
+
+    _wrapText: function(tag, contents) {
+        return '<' + tag + '>' + contents + '</' + tag + '>';
+    },
+
+    fieldCache: {},
+    rawToDisplayCache: {},
+
+    type: 'majorIncidentReviewGenerator'
+};]]></script>
+        <sys_class_name>sys_script_include</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2025-12-29 14:20:32</sys_created_on>
+        <sys_id>60f6a7e6838ef610ea116830ceaad343</sys_id>
+        <sys_mod_count>49</sys_mod_count>
+        <sys_name>majorIncidentReviewGenerator</sys_name>
+        <sys_package display_value="Major Incident Review" source="x_61049_ma_inc_r_0">fe43cfaa8342f610ea116830ceaad382</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Major Incident Review">fe43cfaa8342f610ea116830ceaad382</sys_scope>
+        <sys_update_name>sys_script_include_60f6a7e6838ef610ea116830ceaad343</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2025-12-31 11:03:41</sys_updated_on>
+    </sys_script_include>
+</record_update>

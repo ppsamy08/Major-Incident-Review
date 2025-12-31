@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_properties">
+    <sys_properties action="INSERT_OR_UPDATE">
+        <choices/>
+        <description>Review document footer image (Sys ID of record from table 'db_image')</description>
+        <ignore_cache>true</ignore_cache>
+        <is_private>false</is_private>
+        <name>x_61049_ma_inc_r_0.pdf_doc.footer_image</name>
+        <read_roles/>
+        <suffix>pdf_doc.footer_image</suffix>
+        <sys_class_name>sys_properties</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2025-12-31 09:41:15</sys_created_on>
+        <sys_id>b03a7c5b830e7e10ea116830ceaad3d9</sys_id>
+        <sys_mod_count>3</sys_mod_count>
+        <sys_name>x_61049_ma_inc_r_0.pdf_doc.footer_image</sys_name>
+        <sys_package display_value="Major Incident Review" source="x_61049_ma_inc_r_0">fe43cfaa8342f610ea116830ceaad382</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Major Incident Review">fe43cfaa8342f610ea116830ceaad382</sys_scope>
+        <sys_update_name>sys_properties_b03a7c5b830e7e10ea116830ceaad3d9</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2025-12-31 10:51:17</sys_updated_on>
+        <type>string</type>
+        <value/>
+        <write_roles/>
+    </sys_properties>
+    <sys_translated_text action="delete_multiple" query="documentkey=b03a7c5b830e7e10ea116830ceaad3d9"/>
+</record_update>

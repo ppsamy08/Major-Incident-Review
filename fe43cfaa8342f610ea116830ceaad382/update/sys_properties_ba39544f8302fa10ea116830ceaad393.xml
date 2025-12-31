@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_properties">
+    <sys_properties action="INSERT_OR_UPDATE">
+        <choices/>
+        <description>Major Incident Review Metric Type</description>
+        <ignore_cache>true</ignore_cache>
+        <is_private>false</is_private>
+        <name>x_61049_ma_inc_r_0.mir_metric_type</name>
+        <read_roles/>
+        <suffix>mir_metric_type</suffix>
+        <sys_class_name>sys_properties</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2025-12-30 12:39:11</sys_created_on>
+        <sys_id>ba39544f8302fa10ea116830ceaad393</sys_id>
+        <sys_mod_count>0</sys_mod_count>
+        <sys_name>x_61049_ma_inc_r_0.mir_metric_type</sys_name>
+        <sys_package display_value="Major Incident Review" source="x_61049_ma_inc_r_0">fe43cfaa8342f610ea116830ceaad382</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="Major Incident Review">fe43cfaa8342f610ea116830ceaad382</sys_scope>
+        <sys_update_name>sys_properties_ba39544f8302fa10ea116830ceaad393</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2025-12-30 12:39:11</sys_updated_on>
+        <type>string</type>
+        <value>e925836a8342f610ea116830ceaad335</value>
+        <write_roles/>
+    </sys_properties>
+    <sys_translated_text action="delete_multiple" query="documentkey=ba39544f8302fa10ea116830ceaad393"/>
+</record_update>

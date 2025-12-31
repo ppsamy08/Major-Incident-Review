@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?><database>
+    <element attributes="email_client=true,hasWorkflow=true,live_feed=true,all_tables.query_hints=true" audit="true" db_object_id="bfe13f6e88922210559020d480f9d214" extends="task" label="Incident" max_length="40" name="incident" text_index="true" type="collection">
+        <element label="Incident Self" max_length="32" name="x_61049_ma_inc_r_0_assessable_record" reference="incident" type="reference"/>
+    </element>
+</database>
